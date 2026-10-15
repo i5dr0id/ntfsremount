@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LABEL="com.i5dr0id.ntfsremount"
-BINARY_SRC="${ROOT_DIR}/build/ntfsremount"
-BINARY_DST="/usr/local/sbin/ntfsremount"
+APP_SRC="${ROOT_DIR}/build/NTFSRemount.app"
+APP_DST="/Applications/NTFSRemount.app"
 PLIST_SRC="${ROOT_DIR}/Resources/${LABEL}.plist"
 PLIST_DST="/Library/LaunchDaemons/${LABEL}.plist"
 
@@ -13,14 +13,15 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-if [ ! -x "${BINARY_SRC}" ]; then
-    echo "Binary not found at ${BINARY_SRC}. Run 'make build' first." >&2
+if [ ! -d "${APP_SRC}" ]; then
+    echo "App bundle not found at ${APP_SRC}. Run 'make build' first." >&2
     exit 1
 fi
 
-echo "==> installing ${BINARY_DST}"
-install -d -m 755 /usr/local/sbin
-install -m 755 "${BINARY_SRC}" "${BINARY_DST}"
+echo "==> installing ${APP_DST}"
+rm -rf "${APP_DST}"
+cp -R "${APP_SRC}" "${APP_DST}"
+chown -R root:wheel "${APP_DST}"
 
 echo "==> installing ${PLIST_DST}"
 install -m 644 -o root -g wheel "${PLIST_SRC}" "${PLIST_DST}"
@@ -31,3 +32,7 @@ launchctl bootstrap system "${PLIST_DST}"
 launchctl enable "system/${LABEL}" 2>/dev/null || true
 
 echo "==> done. logs: /var/log/ntfsremount.log"
+echo
+echo "NEXT STEP: grant Full Disk Access to NTFSRemount."
+echo "  System Settings > Privacy & Security > Full Disk Access"
+echo "  Add /Applications/NTFSRemount.app and turn it ON, then replug the drive."

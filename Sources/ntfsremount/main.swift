@@ -50,11 +50,11 @@ func listMounts() -> [MountPoint] {
 final class NtfsRemounter {
     private let ntfs3gPath = "/opt/homebrew/opt/ntfs-3g-t/bin/ntfs-3g"
     private let diskutilPath = "/usr/sbin/diskutil"
+    private let ntfs3gLogPath = "/var/log/ntfsremount-ntfs3g.log"
     private let mountRoot = "/Volumes/"
     private let pollInterval: TimeInterval = 1.5
     private let retryCooldown: TimeInterval = 10.0
 
-    private var running: [Process] = []
     private var cooldown: [String: Date] = [:]
 
     func run() {
@@ -62,6 +62,7 @@ final class NtfsRemounter {
             log("FATAL: ntfs-3g not found at \(ntfs3gPath)")
             return
         }
+        FileManager.default.createFile(atPath: ntfs3gLogPath, contents: nil)
         log("started (ntfs-3g: \(ntfs3gPath), poll: \(pollInterval)s)")
         while true {
             tick()
@@ -70,8 +71,6 @@ final class NtfsRemounter {
     }
 
     private func tick() {
-        running.removeAll { !$0.isRunning }
-
         let mounts = listMounts()
         let present = Set(mounts.map { $0.device })
 
@@ -98,6 +97,19 @@ final class NtfsRemounter {
             log("warning: unmount returned \(unmount.status): \(unmount.output.trimmed)")
         }
 
+        var released = false
+        for _ in 0..<10 {
+            if fsType(at: mount.mountPoint) == nil {
+                released = true
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        if !released {
+            log("warning: \(mount.mountPoint) still busy after unmount; leaving read-only")
+            return
+        }
+
         _ = run("/bin/mkdir", ["-p", mount.mountPoint])
 
         let options = [
@@ -112,8 +124,14 @@ final class NtfsRemounter {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ntfs3gPath)
         process.arguments = ["-o", options, mount.device, mount.mountPoint]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+        if let handle = FileHandle(forWritingAtPath: ntfs3gLogPath) {
+            handle.seekToEndOfFile()
+            process.standardOutput = handle
+            process.standardError = handle
+        } else {
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+        }
 
         do {
             try process.run()
@@ -123,15 +141,19 @@ final class NtfsRemounter {
             return
         }
 
-        Thread.sleep(forTimeInterval: 2.0)
-        if process.isRunning && fsType(at: mount.mountPoint) != "ntfs" {
-            running.append(process)
-            log("mounted read-write: \(mount.device) -> \(mount.mountPoint)")
-        } else {
-            if process.isRunning { process.terminate() }
-            log("error: read-write mount failed; falling back to read-only")
-            restoreReadOnly(mount.device)
+        // FUSE-T's ntfs-3g forks and the parent exits, so success must be
+        // detected via the mount table rather than the process state.
+        for _ in 0..<10 {
+            Thread.sleep(forTimeInterval: 0.5)
+            if let type = fsType(at: mount.mountPoint), type != "ntfs" {
+                log("mounted read-write: \(mount.device) -> \(mount.mountPoint)")
+                return
+            }
         }
+
+        log("error: read-write mount failed; falling back to read-only")
+        if process.isRunning { process.terminate() }
+        restoreReadOnly(mount.device)
     }
 
     private func restoreReadOnly(_ device: String) {

@@ -6,7 +6,7 @@
 	<string>com.i5dr0id.ntfsremount</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/usr/local/sbin/ntfsremount</string>
+		<string>/Applications/NTFSRemount.app/Contents/MacOS/ntfsremount</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>

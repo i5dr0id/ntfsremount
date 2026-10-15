@@ -12,13 +12,19 @@ A truly native, read-write NTFS driver would require an Apple-granted entitlemen
 
 ## How it works
 
-A root LaunchDaemon polls the mount table (`getfsstat`) every 1.5s. When it sees a `ntfs` filesystem mounted under `/Volumes/…` it:
+A root LaunchDaemon (shipped inside the `NTFSRemount.app` bundle) polls the mount table (`getfsstat`) every 1.5s. When it sees a `ntfs` filesystem mounted under `/Volumes/…` it:
 
 1. unmounts the read-only mount,
 2. remounts the device read-write with `ntfs-3g`, using `allow_other` and the console user's `uid`/`gid` so the volume is owned by *you*, not by root,
 3. if the read-write mount fails for any reason, **restores the original read-only mount** so you are never worse off.
 
 It only touches NTFS volumes under `/Volumes`, and it keeps a per-device cool-down so a failing mount can't thrash.
+
+### Why an app bundle and Full Disk Access?
+
+macOS gates raw disk access behind TCC. A bare LaunchDaemon is denied access to `/dev/diskN` (`Operation not permitted`) even when running as root, so `ntfs-3g` cannot open the device. The supported workaround is to run the daemon from a code-signed `.app` bundle and grant that bundle **Full Disk Access**. Once granted, the daemon — and the `ntfs-3g` process it spawns — can read and write the device.
+
+This is a **one-time manual step**, because Full Disk Access can only be toggled by the user in System Settings.
 
 ## Requirements
 
@@ -37,9 +43,19 @@ brew install autoconf automake libtool pkg-config
 ## Install
 
 ```sh
-make install      # asks for your password; installs and starts the LaunchDaemon
+make install      # asks for your password; installs NTFSRemount.app + LaunchDaemon
 make status       # confirm it is loaded
 ```
+
+`make install` builds and code-signs `NTFSRemount.app`, copies it to `/Applications`, installs the LaunchDaemon, and starts it.
+
+Then grant it Full Disk Access (required, one time):
+
+1. Open **System Settings → Privacy & Security → Full Disk Access**.
+2. Click **+** (or drag `NTFSRemount.app` from `/Applications` into the list) and turn it **ON**.
+3. Replug the drive.
+
+Until this is done, the daemon will log `Operation not permitted` and fall back to read-only.
 
 ## Usage
 
@@ -72,8 +88,10 @@ Change it if you installed the FUSE-T build somewhere else, then `make clean && 
 
 ## Limitations
 
+- **Full Disk Access is mandatory** (see above) and can only be granted manually.
 - **Speed.** Going through FUSE-T has overhead; throughput is well below the raw USB speed. Fine for documents and media files, not ideal for giant sustained transfers.
 - It remounts **every** NTFS volume under `/Volumes`, with no per-device allow-list.
+- macOS may drop AppleDouble `._name` companion files onto the drive; add `noappledouble` to the `ntfs-3g` options in `main.swift` if you want a cleaner volume.
 - Some sandboxed apps may need "Network Volumes" permission (FUSE-T presents the mount over NFS internally).
 - Ejecting from Finder may need a moment to fully release the device.
 
